@@ -30,12 +30,38 @@
 #define DNSMASQ_DROPIN   "/etc/dnsmasq.d/onet.conf"
 #endif
 
+/* WAN side: upstream interface and how to manage it. */
+typedef struct {
+    char name[IFNAMSIZ];        /* upstream iface (was fwd_iface) */
+    char type[16];              /* "tether", "ethernet", "wwan" */
+    int  nat;                   /* 1 = MASQUERADE on egress; auto-defaults below */
+    char watchdog_target[64];   /* host/IP -m mode pings, default "1.1.1.1" */
+    int  watchdog_interval_s;   /* default 30 */
+    int  watchdog_failures;     /* consecutive failures before recovery, default 3 */
+    char qos[16];               /* "fq_codel", "cake", "none" */
+    char modem_apn[64];         /* type=wwan only */
+    char modem_index[8];        /* type=wwan only; "" = auto */
+} wan_config_t;
+
+typedef struct {
+    int input_drop_wan;         /* default 1: drop new connections on WAN INPUT */
+} firewall_config_t;
+
+typedef struct {
+    int  enable;                /* default 1 */
+    char ula_prefix[40];        /* "fd00:dead:beef" — /48; per-LAN gets a /64 */
+} ipv6_config_t;
+
 /* hostapd: SSID 1..32, PSK 8..63 */
 typedef struct {
     char ssid[33];
     char psk[64];
-    char fwd_iface[IFNAMSIZ];
     char country[3];
+    /* Legacy: [Hotspot].fwd_iface; if set and wan.name empty, copied into wan.name. */
+    char fwd_iface[IFNAMSIZ];
+    wan_config_t wan;
+    firewall_config_t fw;
+    ipv6_config_t v6;
 } global_config_t;
 
 typedef struct {
@@ -48,10 +74,13 @@ typedef struct {
     char dns1[INET_ADDRSTRLEN];
     char lease_time[16];
     char channel[8];
-    char phy_mode[4];     /* "n", "ac", "ax", "be" */
-    int  chwidth_mhz;     /* 20, 40, 80, 160, 320 */
-    int  enabled;         /* 0/1 */
-    int  band;            /* 0 = 2.4 GHz, 1 = 5 GHz, 2 = 6 GHz */
+    char phy_mode[4];           /* "n", "ac", "ax", "be" */
+    char bridge[IFNAMSIZ];      /* if set, this iface joins that bridge */
+    char bridge_members[128];   /* if set, this iface IS a bridge with these members */
+    int  chwidth_mhz;           /* 20, 40, 80, 160, 320 */
+    int  enabled;               /* 0/1 */
+    int  band;                  /* 0 = 2.4 GHz, 1 = 5 GHz, 2 = 6 GHz */
+    int  ipv6;                  /* per-LAN IPv6 (defaults to global enable) */
 } iface_config_t;
 
 void config_default_global(global_config_t *cfg);

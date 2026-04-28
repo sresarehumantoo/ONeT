@@ -37,3 +37,9 @@ clean:
 
 install: $(BIN)
 	install -Dm755 $(BIN) $(DESTDIR)$(PREFIX)/bin/onet
+
+install-systemd: install
+	install -Dm644 contrib/systemd/onet.service          $(DESTDIR)/etc/systemd/system/onet.service
+	install -Dm644 contrib/systemd/onet-watchdog.service $(DESTDIR)/etc/systemd/system/onet-watchdog.service
+	@echo
+	@echo "Now enable with:  systemctl daemon-reload && systemctl enable --now onet onet-watchdog"

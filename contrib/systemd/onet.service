@@ -1,0 +1,15 @@
+[Unit]
+Description=ONeT Access — hotspot bring-up
+After=network-pre.target
+Before=network.target hostapd.service dnsmasq.service
+Wants=network-pre.target
+ConditionPathExists=/etc/ONeT/hotspot/custom.ini
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/onet -s
+ExecStop=/usr/local/bin/onet -w
+
+[Install]
+WantedBy=multi-user.target

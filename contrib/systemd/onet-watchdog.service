@@ -1,0 +1,13 @@
+[Unit]
+Description=ONeT Access — WAN watchdog
+After=onet.service
+Requires=onet.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/onet -m
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target
