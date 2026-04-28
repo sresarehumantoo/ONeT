@@ -28,6 +28,8 @@ void config_default_iface(iface_config_t *cfg) {
     snprintf(cfg->dns1,        sizeof cfg->dns1,        "%s", "8.8.4.4");
     snprintf(cfg->lease_time,  sizeof cfg->lease_time,  "%s", "12h");
     snprintf(cfg->channel,     sizeof cfg->channel,     "%s", "6");
+    snprintf(cfg->phy_mode,    sizeof cfg->phy_mode,    "%s", "n");
+    cfg->chwidth_mhz = 20;
     cfg->enabled = 0;
     cfg->band = 0;
 }
@@ -61,6 +63,8 @@ static int handler_iface(void *user, const char *section,
     else if (strcmp(key, "dns1")        == 0) copy_str(cfg->dns1,        sizeof cfg->dns1,        value);
     else if (strcmp(key, "lease_time")  == 0) copy_str(cfg->lease_time,  sizeof cfg->lease_time,  value);
     else if (strcmp(key, "channel")     == 0) copy_str(cfg->channel,     sizeof cfg->channel,     value);
+    else if (strcmp(key, "phy_mode")    == 0) copy_str(cfg->phy_mode,    sizeof cfg->phy_mode,    value);
+    else if (strcmp(key, "chwidth_mhz") == 0) cfg->chwidth_mhz = atoi(value);
     else if (strcmp(key, "enabled")     == 0) cfg->enabled = atoi(value) ? 1 : 0;
     else if (strcmp(key, "band")        == 0) cfg->band    = atoi(value);
     return 1;
@@ -91,8 +95,9 @@ int config_save_global(const char *path, const global_config_t *cfg) {
 
 int config_save_iface(const char *path, const iface_config_t *cfg) {
     char enabled[2] = { cfg->enabled ? '1' : '0', 0 };
-    char band[4];
+    char band[4], chwidth[8];
     snprintf(band, sizeof band, "%d", cfg->band);
+    snprintf(chwidth, sizeof chwidth, "%d", cfg->chwidth_mhz);
 
     ini_entry_list_t list = NULL;
     AddEntryToList(&list, "Interface", "name",        cfg->name);
@@ -104,6 +109,8 @@ int config_save_iface(const char *path, const iface_config_t *cfg) {
     AddEntryToList(&list, "Interface", "dns1",        cfg->dns1);
     AddEntryToList(&list, "Interface", "lease_time",  cfg->lease_time);
     AddEntryToList(&list, "Interface", "channel",     cfg->channel);
+    AddEntryToList(&list, "Interface", "phy_mode",    cfg->phy_mode);
+    AddEntryToList(&list, "Interface", "chwidth_mhz", chwidth);
     AddEntryToList(&list, "Interface", "enabled",     enabled);
     AddEntryToList(&list, "Interface", "band",        band);
     int rc = MakeINIFile(path, list);
