@@ -99,7 +99,9 @@ input_drop_wan=1            ; drop new INPUT connections from WAN
 
 [IPv6]
 enable=1
-ula_prefix=fd00:dead:beef   ; /48; per-LAN /64 derived from name hash
+pd=0                        ; 1 = request DHCPv6-PD on WAN via dhcpcd
+pd_length=60                ; requested prefix length (carrier may give /60 or /56)
+ula_prefix=fd00:dead:beef   ; used when pd=0 (LAN-only); /48; per-LAN /64 by hash
 ```
 
 ### Backward compatibility
@@ -262,11 +264,31 @@ Applied via `iptables -t nat PREROUTING DNAT` plus a matching
 - Adds an `ip6tables FORWARD` rule that allows ULA-to-ULA traffic so
   LANs can reach each other.
 
-**Out of scope (for now):** real IPv6 internet connectivity. That
-requires a DHCPv6 prefix delegation client (`dhcpcd`/`wide-dhcpv6`)
-listening on the WAN, and rebuilding per-LAN prefixes from the
-delegated block. ULA-only means inter-LAN IPv6 works; clients won't
-reach the IPv6 public internet through this box.
+### IPv6 with prefix delegation (real internet)
+
+Set `[IPv6] pd=1` and ONeT will:
+
+1. Generate `/run/ONeT/dhcpcd.conf` listing the WAN interface plus every
+   enabled LAN with `ipv6=1`, each numbered `/64` from the delegated block:
+
+   ```
+   interface wwan0
+     ipv6rs
+     ia_na 1
+     ia_pd 1/::/60 br0/0/64 lan2/1/64 lan3/2/64
+   ```
+2. Spawn `dhcpcd -f /run/ONeT/dhcpcd.conf -B <wan>` detached, pidfile in
+   `/run/ONeT/dhcpcd.pid`, log in `/var/log/ONeT/dhcpcd.log`.
+3. Skip ULA address install on LANs (dhcpcd handles assignment).
+4. Leave RA emission to dnsmasq (`dhcp-range=::,constructor:<iface>,
+   ra-only`), so clients SLAAC into the delegated /64.
+
+On `-w` (or watchdog recovery), dhcpcd is `SIGTERM`'d via the pidfile.
+
+**Carriers vary**: AT&T/Verizon mostly hand out `/64` (no usable PD,
+fall back to ULA), Comcast `/60`, T-Mobile Home Internet refuses PD.
+Set `pd_length` to what your upstream actually delegates; if dhcpcd
+doesn't acquire a prefix within ~30s, check `/var/log/ONeT/dhcpcd.log`.
 
 ## QoS
 

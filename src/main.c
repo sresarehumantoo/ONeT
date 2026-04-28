@@ -44,6 +44,31 @@ static int is_not_bridge(const iface_config_t *i) { return i->bridge_members[0] 
 static int iter_iface_configs_filtered(iface_fn fn, iface_filter pass,
                                        const global_config_t *g);
 
+/* Build a comma-separated list of LAN ifaces that should receive a /64
+ * from a delegated prefix: enabled, ipv6=1, not a bridge member-only
+ * (bridge-joining wireless ifaces don't need their own address). */
+static void collect_pd_lans(const global_config_t *g, char *out, size_t outlen) {
+    (void)g;
+    out[0] = '\0';
+    struct dirent **list = NULL;
+    int n = scandir(ONET_CONFIG_DIR, &list, parse_ext, alphasort);
+    if (n < 0) return;
+    size_t used = 0;
+    for (int i = 0; i < n; i++) {
+        char path[512];
+        snprintf(path, sizeof path, "%s/%s", ONET_CONFIG_DIR, list[i]->d_name);
+        iface_config_t iface;
+        if (config_load_iface(path, &iface) == 0
+            && iface.enabled && iface.ipv6 && iface.bridge[0] == '\0') {
+            int w = snprintf(out + used, outlen - used,
+                             "%s%s", used ? "," : "", iface.name);
+            if (w > 0 && (size_t)w < outlen - used) used += (size_t)w;
+        }
+        free(list[i]);
+    }
+    free(list);
+}
+
 static int iter_iface_configs(iface_fn fn, const global_config_t *g) {
     int rc1 = iter_iface_configs_filtered(fn, is_bridge,     g);
     int rc2 = iter_iface_configs_filtered(fn, is_not_bridge, g);
@@ -149,10 +174,16 @@ int main(int argc, char *argv[]) {
         if (!d_flag) hotspot_kill_existing();
         if (hotspot_wan_up(&g) < 0) return 1;
         int rc = iter_iface_configs(hotspot_up, &g);
+        if (rc == 0 && g.v6.enable && g.v6.pd) {
+            char lans[512];
+            collect_pd_lans(&g, lans, sizeof lans);
+            ipv6_pd_start(&g, lans);
+        }
         if (rc == 0) dnsmasq_restart();
         return rc < 0 ? 1 : 0;
     }
     if (w_flag) {
+        ipv6_pd_stop();
         iter_iface_configs(hotspot_down, &g);
         hotspot_wan_down(&g);
         dnsmasq_remove();
@@ -186,6 +217,7 @@ int main(int argc, char *argv[]) {
                          g.wan.watchdog_target, consec, max_fails);
                 if (consec >= max_fails) {
                     log_warn("watchdog: triggering full recovery cycle");
+                    ipv6_pd_stop();
                     iter_iface_configs(hotspot_down, &g);
                     hotspot_wan_down(&g);
                     dnsmasq_remove();
@@ -193,6 +225,11 @@ int main(int argc, char *argv[]) {
                         log_error("watchdog: WAN recovery failed; will retry");
                     } else {
                         iter_iface_configs(hotspot_up, &g);
+                        if (g.v6.enable && g.v6.pd) {
+                            char lans[512];
+                            collect_pd_lans(&g, lans, sizeof lans);
+                            ipv6_pd_start(&g, lans);
+                        }
                         dnsmasq_restart();
                     }
                     consec = 0;

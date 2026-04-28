@@ -49,7 +49,9 @@ typedef struct {
 
 typedef struct {
     int  enable;                /* default 1 */
-    char ula_prefix[40];        /* "fd00:dead:beef" — /48; per-LAN gets a /64 */
+    int  pd;                    /* 1 = request DHCPv6-PD on WAN via dhcpcd */
+    int  pd_length;             /* requested prefix length; default 60 */
+    char ula_prefix[40];        /* used when PD off, or as fallback */
 } ipv6_config_t;
 
 /* hostapd: SSID 1..32, PSK 8..63 */

@@ -19,6 +19,13 @@ int ipv6_addr_remove(const char *iface, const char *ula_prefix);
 int ip6tables_forward_install(void);
 int ip6tables_forward_remove(void);
 
+/* DHCPv6 prefix delegation: write /run/ONeT/dhcpcd.conf listing the WAN
+ * and the LAN names with sub-prefix indices, then spawn dhcpcd detached.
+ * lan_names_csv is a comma-separated list of LAN interface names that
+ * should receive a /64 from the delegated prefix. */
+int ipv6_pd_start(const global_config_t *g, const char *lan_names_csv);
+int ipv6_pd_stop(void);
+
 /* hostapd: write conf, spawn detached daemon, terminate via pidfile. */
 int hostapd_write_conf(const iface_config_t *iface,
                        const global_config_t *g,

@@ -135,7 +135,7 @@ int hotspot_up(const iface_config_t *iface, const global_config_t *g) {
     if (ifconfig_up(iface->name, iface->ip, iface->mask) < 0) return -1;
     route_del_default(iface->name);
 
-    if (g->v6.enable && iface->ipv6) {
+    if (g->v6.enable && iface->ipv6 && !g->v6.pd) {
         ipv6_addr_install(iface->name, g->v6.ula_prefix);
         log_info("IPv6 ULA address installed on %s (prefix %s)",
                  iface->name, g->v6.ula_prefix);
@@ -162,7 +162,7 @@ int hotspot_down(const iface_config_t *iface, const global_config_t *g) {
         return 0;
     }
     iptables_forward_remove(iface->name, g->wan.name);
-    if (g->v6.enable && iface->ipv6) {
+    if (g->v6.enable && iface->ipv6 && !g->v6.pd) {
         ipv6_addr_remove(iface->name, g->v6.ula_prefix);
     }
     ifconfig_down(iface->name);

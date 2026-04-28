@@ -26,6 +26,8 @@ void config_default_global(global_config_t *cfg) {
 
     cfg->fw.input_drop_wan = 1;
     cfg->v6.enable = 1;
+    cfg->v6.pd = 0;
+    cfg->v6.pd_length = 60;
     snprintf(cfg->v6.ula_prefix, sizeof cfg->v6.ula_prefix, "%s", "fd00:dead:beef");
 }
 
@@ -75,6 +77,8 @@ static int handler_global(void *user, const char *section,
         if (strcmp(key, "input_drop_wan") == 0) cfg->fw.input_drop_wan = atoi(value) ? 1 : 0;
     } else if (strcmp(section, "IPv6") == 0) {
         if      (strcmp(key, "enable")     == 0) cfg->v6.enable = atoi(value) ? 1 : 0;
+        else if (strcmp(key, "pd")         == 0) cfg->v6.pd     = atoi(value) ? 1 : 0;
+        else if (strcmp(key, "pd_length")  == 0) cfg->v6.pd_length = atoi(value);
         else if (strcmp(key, "ula_prefix") == 0) copy_str(cfg->v6.ula_prefix, sizeof cfg->v6.ula_prefix, value);
     }
     return 1;
@@ -166,7 +170,13 @@ int config_save_global(const char *path, const global_config_t *cfg) {
 
     AddEntryToList(&list, "Firewall", "input_drop_wan", drop);
 
+    char pd[2]   = { cfg->v6.pd ? '1' : '0', 0 };
+    char pd_l[8];
+    snprintf(pd_l, sizeof pd_l, "%d", cfg->v6.pd_length);
+
     AddEntryToList(&list, "IPv6", "enable",     v6en);
+    AddEntryToList(&list, "IPv6", "pd",         pd);
+    AddEntryToList(&list, "IPv6", "pd_length",  pd_l);
     AddEntryToList(&list, "IPv6", "ula_prefix", cfg->v6.ula_prefix);
 
     int rc = MakeINIFile(path, list);
