@@ -13,4 +13,10 @@ int  hotspot_up(const iface_config_t *iface, const global_config_t *g);
 int  hotspot_down(const iface_config_t *iface, const global_config_t *g);
 void hotspot_kill_existing(void);
 
+/* Switch the active WAN to new_idx (0=primary, 1=backup). Tears down
+ * per-LAN FORWARD + WAN-side rules on the old WAN, mutates
+ * g->active_wan_idx, brings up the new one, reinstalls per-LAN FORWARD,
+ * and restarts dhcpcd-PD if active. Rolls back on failure. */
+int  hotspot_wan_switch(global_config_t *g, int new_idx);
+
 #endif /* ONET_HOTSPOT_H */

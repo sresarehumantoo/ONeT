@@ -54,6 +54,14 @@ typedef struct {
     char ula_prefix[40];        /* used when PD off, or as fallback */
 } ipv6_config_t;
 
+/* Passive SPAN-style traffic mirror to a dummy iface for capture. */
+typedef struct {
+    int  enable;
+    char sources[256];          /* comma-separated source ifaces */
+    char direction[16];         /* "ingress" | "egress" | "both" */
+    char destination[IFNAMSIZ]; /* dummy iface; auto-created if missing */
+} mirror_config_t;
+
 /* hostapd: SSID 1..32, PSK 8..63 */
 typedef struct {
     char ssid[33];
@@ -61,10 +69,19 @@ typedef struct {
     char country[3];
     /* Legacy: [Hotspot].fwd_iface; if set and wan.name empty, copied into wan.name. */
     char fwd_iface[IFNAMSIZ];
-    wan_config_t wan;
+    wan_config_t wan;           /* primary WAN — section [Wan] */
+    wan_config_t wan_backup;    /* optional backup — section [Wan.backup]; name="" if absent */
+    int active_wan_idx;         /* runtime: 0=primary, 1=backup. Mutated by hotspot_wan_switch. */
+    int failback_hold_s;        /* seconds primary must be reachable before swapping back; default 300 */
     firewall_config_t fw;
     ipv6_config_t v6;
+    mirror_config_t mirror;
 } global_config_t;
+
+/* Accessors for the runtime-active WAN (and the inactive one for failback probing). */
+const wan_config_t *wan_active  (const global_config_t *g);
+const wan_config_t *wan_inactive(const global_config_t *g);   /* NULL if no backup */
+int                 wan_have_backup(const global_config_t *g);
 
 typedef struct {
     char name[IFNAMSIZ];
@@ -95,5 +112,15 @@ int config_load_iface(const char *path, iface_config_t *cfg);
 int config_save_iface(const char *path, const iface_config_t *cfg);
 
 int config_ensure_dirs(void);
+
+/* Walk every *.int in ONET_CONFIG_DIR alphabetically and call fn(iface, user)
+ * for each one that passes the filter. With filter == NULL, every iface is
+ * visited. Returns -1 if any fn call returned non-zero. */
+typedef int (*config_iface_visitor_t)(const iface_config_t *, void *user);
+typedef int (*config_iface_filter_t)(const iface_config_t *);
+int config_for_each_iface(config_iface_visitor_t fn, void *user);
+int config_for_each_iface_filtered(config_iface_visitor_t fn,
+                                   config_iface_filter_t filter,
+                                   void *user);
 
 #endif /* ONET_CONFIG_H */

@@ -64,7 +64,7 @@ int ip6tables_forward_remove(void) {
 
 int ipv6_pd_start(const global_config_t *g, const char *lan_names_csv) {
     if (!g->v6.enable || !g->v6.pd) return 0;
-    if (g->wan.name[0] == '\0') return -1;
+    if (wan_active(g)->name[0] == '\0') return -1;
 
     int pd_len = g->v6.pd_length > 0 ? g->v6.pd_length : 60;
 
@@ -82,7 +82,7 @@ int ipv6_pd_start(const global_config_t *g, const char *lan_names_csv) {
     fprintf(f, "noarp\n");
     fprintf(f, "option rapid_commit\n");
     fprintf(f, "\n");
-    fprintf(f, "interface %s\n", g->wan.name);
+    fprintf(f, "interface %s\n", wan_active(g)->name);
     fprintf(f, "  ipv6rs\n");
     fprintf(f, "  ia_na 1\n");
     fprintf(f, "  ia_pd 1/::/%d", pd_len);
@@ -131,10 +131,10 @@ int ipv6_pd_start(const global_config_t *g, const char *lan_names_csv) {
     }
 
     log_info("starting dhcpcd for PD on %s (requesting /%d, %d LAN /64s)",
-             g->wan.name, pd_len, idx);
+             wan_active(g)->name, pd_len, idx);
 
     const char *argv[] = {
-        "dhcpcd", "-f", ONET_DHCPCD_CONF, "-B", "--nopid", g->wan.name, NULL,
+        "dhcpcd", "-f", ONET_DHCPCD_CONF, "-B", "--nopid", wan_active(g)->name, NULL,
     };
     return proc_spawn_detached(argv, ONET_DHCPCD_PID, ONET_DHCPCD_LOG);
 }

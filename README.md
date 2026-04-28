@@ -94,6 +94,15 @@ qos=fq_codel                ; fq_codel | cake | none
 modem_apn=                  ; required when type=wwan
 modem_index=                ; type=wwan only; "" → mmcli auto-detect
 
+# Optional: secondary WAN for active/backup failover. Same keys as [Wan].
+# Leave the section out if you don't have a backup.
+[Wan.backup]
+name=wwan0
+type=wwan
+modem_apn=internet
+qos=fq_codel
+watchdog_target=1.1.1.1
+
 [Firewall]
 input_drop_wan=1            ; drop new INPUT connections from WAN
 
@@ -102,6 +111,12 @@ enable=1
 pd=0                        ; 1 = request DHCPv6-PD on WAN via dhcpcd
 pd_length=60                ; requested prefix length (carrier may give /60 or /56)
 ula_prefix=fd00:dead:beef   ; used when pd=0 (LAN-only); /48; per-LAN /64 by hash
+
+[Mirror]
+enable=0                    ; passive SPAN-style traffic copy
+sources=                    ; comma-separated source ifaces, e.g. br0,wlan0
+direction=both              ; ingress | egress | both
+destination=onet-mirror     ; auto-created as a `dummy` if missing
 ```
 
 ### Backward compatibility
@@ -194,6 +209,31 @@ qos=fq_codel
 ```
 Bring `eth0` up yourself first (DHCP via `dhclient`/systemd-networkd).
 ONeT will MASQUERADE LAN traffic out of `eth0`.
+
+### Active/backup multi-WAN
+
+```ini
+[Wan]
+name=eth0
+type=ethernet
+nat=1
+qos=fq_codel
+watchdog_target=1.1.1.1
+
+[Wan.backup]
+name=wwan0
+type=wwan
+modem_apn=internet
+nat=1
+qos=fq_codel
+watchdog_target=1.1.1.1
+
+[Hotspot]
+failback_hold=300
+```
+Watchdog pings via the active iface; on N failures swaps to the other.
+Failback is automatic (with hold-down) for non-wwan primaries, manual
+via `onet -s` for wwan primaries — see Watchdog section below.
 
 ### Bridged AP — eth1 + wlan0 on one /24
 
@@ -290,6 +330,49 @@ fall back to ULA), Comcast `/60`, T-Mobile Home Internet refuses PD.
 Set `pd_length` to what your upstream actually delegates; if dhcpcd
 doesn't acquire a prefix within ~30s, check `/var/log/ONeT/dhcpcd.log`.
 
+## SPAN-style mirror port
+
+For passive traffic capture (security audits, zeek/suricata, debugging
+client behavior). Set in `custom.ini`:
+
+```ini
+[Mirror]
+enable=1
+sources=br0,wlan0          ; copy traffic from these ifaces
+direction=both             ; ingress | egress | both
+destination=onet-mirror    ; auto-created as a dummy iface
+```
+
+On `-s`, ONeT:
+1. Creates the destination iface (`ip link add onet-mirror type dummy`)
+   and brings it up. If you pre-create your own destination (a real
+   NIC, a tap device, an `ifb`), give it a different name from the
+   default and ONeT will leave its lifecycle alone.
+2. For each source iface:
+   - **ingress**: `tc qdisc add dev <src> handle ffff: ingress` plus a
+     `matchall action mirred egress mirror dev <dst>` filter.
+   - **egress**: `tc qdisc replace dev <src> root handle 1: prio` plus
+     a matching mirror filter.
+
+Then run your capture:
+```sh
+tcpdump -ni onet-mirror
+zeek -i onet-mirror
+suricata -i onet-mirror
+```
+
+**Caveats:**
+- Egress mirror replaces the root qdisc on each source. Don't enable
+  `[Mirror]` egress on a source that already has `[Wan].qos` running
+  (in practice, mirror runs on LAN sources and QoS on the WAN, so they
+  don't collide unless you point both at the same iface).
+- This is *passive* mirroring. ONeT does not do TLS interception or
+  transparent proxying — that requires a CA on every client device,
+  which is out of scope. If you really want active inspection, run
+  mitmproxy on a separate port and add your own
+  `iptables -t nat -A PREROUTING ... -j REDIRECT --to-port` rule
+  externally.
+
 ## QoS
 
 `[Wan].qos` controls the qdisc on the WAN egress:
@@ -300,16 +383,36 @@ doesn't acquire a prefix within ~30s, check `/var/log/ONeT/dhcpcd.log`.
 
 Implemented as `tc qdisc replace dev <wan> root <kind>`.
 
-## Watchdog (-m)
+## Watchdog (-m) and multi-WAN failover
 
-Designed to run as a systemd `Type=simple` service. Pings
-`[Wan].watchdog_target` every `watchdog_interval` seconds. After
-`watchdog_failures` consecutive misses, runs a full
-`hotspot_down → wan_down → wan_up → hotspot_up` cycle.
+Designed to run as a systemd `Type=simple` service. Each interval, the
+watchdog pings `watchdog_target` via `ping -I <active_iface>` so the
+probe actually traverses the link it's supposed to test.
 
-For `type=wwan`, this includes `mmcli --simple-disconnect` followed by
-re-enabling and re-connecting the modem — useful for the ~daily flap
-that 5G CPEs do.
+**With a single WAN**: after `watchdog_failures` consecutive misses,
+runs a full `hotspot_down → wan_down → wan_up → hotspot_up` recovery
+cycle. For `type=wwan` this includes `mmcli --simple-disconnect` +
+re-enable + reconnect — useful for the ~daily flap that 5G CPEs do.
+
+**With `[Wan.backup]` configured**: failure on the active WAN swaps
+to the other one (`hotspot_wan_switch` — re-keys all per-LAN FORWARD
+rules, NAT, QoS, port forwards, dhcpcd-PD) without taking the LAN
+ifaces down. Hostapd / dnsmasq / clients keep their L3 state; only
+the WAN-anchored rules and the default route flip.
+
+**Failback**: while running on backup, the watchdog probes the primary
+in parallel (via `ping -I <primary_iface>`). After 3 successes and
+`failback_hold` seconds (default 300) since the last switch, it swaps
+back. Hold-down prevents flapping when the primary is intermittently
+reachable. Failback is **disabled when the primary's `type=wwan`** —
+the modem disconnects on switch-away, so probing it without
+re-connecting always fails. Run `onet -s` to fail back manually in
+that case.
+
+```ini
+[Hotspot]
+failback_hold=300           ; seconds; default 300 (5 minutes)
+```
 
 ## systemd integration
 

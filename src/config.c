@@ -6,8 +6,13 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include <dirent.h>
+
 #include "ezini.h"
 #include "ini.h"
+#include "log.h"
+
+static void copy_str(char *dst, size_t dstlen, const char *src);
 
 void config_default_global(global_config_t *cfg) {
     memset(cfg, 0, sizeof(*cfg));
@@ -29,6 +34,40 @@ void config_default_global(global_config_t *cfg) {
     cfg->v6.pd = 0;
     cfg->v6.pd_length = 60;
     snprintf(cfg->v6.ula_prefix, sizeof cfg->v6.ula_prefix, "%s", "fd00:dead:beef");
+
+    cfg->active_wan_idx = 0;
+    cfg->failback_hold_s = 300;
+    /* backup defaults: same as primary except no name (sentinel for "absent"). */
+    cfg->wan_backup = cfg->wan;
+    cfg->wan_backup.name[0] = '\0';
+
+    cfg->mirror.enable = 0;
+    snprintf(cfg->mirror.direction,   sizeof cfg->mirror.direction,   "%s", "both");
+    snprintf(cfg->mirror.destination, sizeof cfg->mirror.destination, "%s", "onet-mirror");
+}
+
+const wan_config_t *wan_active(const global_config_t *g) {
+    return g->active_wan_idx == 1 ? &g->wan_backup : &g->wan;
+}
+const wan_config_t *wan_inactive(const global_config_t *g) {
+    if (!wan_have_backup(g)) return NULL;
+    return g->active_wan_idx == 1 ? &g->wan : &g->wan_backup;
+}
+int wan_have_backup(const global_config_t *g) {
+    return g->wan_backup.name[0] != '\0';
+}
+
+/* Apply a key=value pair to a wan_config_t. Used by both primary and backup parsers. */
+static void wan_apply_kv(wan_config_t *w, const char *key, const char *value) {
+    if      (strcmp(key, "name")              == 0) copy_str(w->name,            sizeof w->name,            value);
+    else if (strcmp(key, "type")              == 0) copy_str(w->type,            sizeof w->type,            value);
+    else if (strcmp(key, "nat")               == 0) w->nat = atoi(value) ? 1 : 0;
+    else if (strcmp(key, "watchdog_target")   == 0) copy_str(w->watchdog_target, sizeof w->watchdog_target, value);
+    else if (strcmp(key, "watchdog_interval") == 0) w->watchdog_interval_s = atoi(value);
+    else if (strcmp(key, "watchdog_failures") == 0) w->watchdog_failures   = atoi(value);
+    else if (strcmp(key, "qos")               == 0) copy_str(w->qos,             sizeof w->qos,             value);
+    else if (strcmp(key, "modem_apn")         == 0) copy_str(w->modem_apn,       sizeof w->modem_apn,       value);
+    else if (strcmp(key, "modem_index")       == 0) copy_str(w->modem_index,     sizeof w->modem_index,     value);
 }
 
 void config_default_iface(iface_config_t *cfg) {
@@ -59,20 +98,15 @@ static int handler_global(void *user, const char *section,
                           const char *key, const char *value) {
     global_config_t *cfg = (global_config_t *)user;
     if (strcmp(section, "Hotspot") == 0) {
-        if      (strcmp(key, "ssid")      == 0) copy_str(cfg->ssid,      sizeof cfg->ssid,      value);
-        else if (strcmp(key, "psk")       == 0) copy_str(cfg->psk,       sizeof cfg->psk,       value);
-        else if (strcmp(key, "country")   == 0) copy_str(cfg->country,   sizeof cfg->country,   value);
-        else if (strcmp(key, "fwd_iface") == 0) copy_str(cfg->fwd_iface, sizeof cfg->fwd_iface, value);
+        if      (strcmp(key, "ssid")           == 0) copy_str(cfg->ssid,      sizeof cfg->ssid,      value);
+        else if (strcmp(key, "psk")            == 0) copy_str(cfg->psk,       sizeof cfg->psk,       value);
+        else if (strcmp(key, "country")        == 0) copy_str(cfg->country,   sizeof cfg->country,   value);
+        else if (strcmp(key, "fwd_iface")      == 0) copy_str(cfg->fwd_iface, sizeof cfg->fwd_iface, value);
+        else if (strcmp(key, "failback_hold")  == 0) cfg->failback_hold_s = atoi(value);
     } else if (strcmp(section, "Wan") == 0) {
-        if      (strcmp(key, "name")              == 0) copy_str(cfg->wan.name,            sizeof cfg->wan.name,            value);
-        else if (strcmp(key, "type")              == 0) copy_str(cfg->wan.type,            sizeof cfg->wan.type,            value);
-        else if (strcmp(key, "nat")               == 0) cfg->wan.nat = atoi(value) ? 1 : 0;
-        else if (strcmp(key, "watchdog_target")   == 0) copy_str(cfg->wan.watchdog_target, sizeof cfg->wan.watchdog_target, value);
-        else if (strcmp(key, "watchdog_interval") == 0) cfg->wan.watchdog_interval_s = atoi(value);
-        else if (strcmp(key, "watchdog_failures") == 0) cfg->wan.watchdog_failures   = atoi(value);
-        else if (strcmp(key, "qos")               == 0) copy_str(cfg->wan.qos,             sizeof cfg->wan.qos,             value);
-        else if (strcmp(key, "modem_apn")         == 0) copy_str(cfg->wan.modem_apn,       sizeof cfg->wan.modem_apn,       value);
-        else if (strcmp(key, "modem_index")       == 0) copy_str(cfg->wan.modem_index,     sizeof cfg->wan.modem_index,     value);
+        wan_apply_kv(&cfg->wan, key, value);
+    } else if (strcmp(section, "Wan.backup") == 0) {
+        wan_apply_kv(&cfg->wan_backup, key, value);
     } else if (strcmp(section, "Firewall") == 0) {
         if (strcmp(key, "input_drop_wan") == 0) cfg->fw.input_drop_wan = atoi(value) ? 1 : 0;
     } else if (strcmp(section, "IPv6") == 0) {
@@ -80,6 +114,11 @@ static int handler_global(void *user, const char *section,
         else if (strcmp(key, "pd")         == 0) cfg->v6.pd     = atoi(value) ? 1 : 0;
         else if (strcmp(key, "pd_length")  == 0) cfg->v6.pd_length = atoi(value);
         else if (strcmp(key, "ula_prefix") == 0) copy_str(cfg->v6.ula_prefix, sizeof cfg->v6.ula_prefix, value);
+    } else if (strcmp(section, "Mirror") == 0) {
+        if      (strcmp(key, "enable")      == 0) cfg->mirror.enable = atoi(value) ? 1 : 0;
+        else if (strcmp(key, "sources")     == 0) copy_str(cfg->mirror.sources,     sizeof cfg->mirror.sources,     value);
+        else if (strcmp(key, "direction")   == 0) copy_str(cfg->mirror.direction,   sizeof cfg->mirror.direction,   value);
+        else if (strcmp(key, "destination") == 0) copy_str(cfg->mirror.destination, sizeof cfg->mirror.destination, value);
     }
     return 1;
 }
@@ -132,10 +171,20 @@ int config_load_global(const char *path, global_config_t *cfg) {
      * to apply the legacy fwd_iface fallback. */
     cfg->wan.name[0] = '\0';
     cfg->wan.type[0] = '\0';
+    cfg->wan_backup.name[0] = '\0';  /* sentinel: backup absent */
+    cfg->wan_backup.type[0] = '\0';
     cfg->fwd_iface[0] = '\0';
     int rc = ini_parse(path, handler_global, cfg);
     if (rc < 0) return -1;
     resolve_global(cfg);
+    /* Resolve backup defaults if user set name but not type. */
+    if (cfg->wan_backup.name[0] != '\0' && cfg->wan_backup.type[0] == '\0') {
+        snprintf(cfg->wan_backup.type, sizeof cfg->wan_backup.type, "%s", "ethernet");
+    }
+    if (cfg->wan_backup.name[0] != '\0' && cfg->wan_backup.nat == -1) {
+        cfg->wan_backup.nat =
+            (strcmp(cfg->wan_backup.type, "tether") == 0) ? 0 : 1;
+    }
     return 0;
 }
 
@@ -168,6 +217,17 @@ int config_save_global(const char *path, const global_config_t *cfg) {
     AddEntryToList(&list, "Wan", "modem_apn",         cfg->wan.modem_apn);
     AddEntryToList(&list, "Wan", "modem_index",       cfg->wan.modem_index);
 
+    if (cfg->wan_backup.name[0] != '\0') {
+        char nat2[2] = { cfg->wan_backup.nat > 0 ? '1' : '0', 0 };
+        AddEntryToList(&list, "Wan.backup", "name",            cfg->wan_backup.name);
+        AddEntryToList(&list, "Wan.backup", "type",            cfg->wan_backup.type);
+        AddEntryToList(&list, "Wan.backup", "nat",             nat2);
+        AddEntryToList(&list, "Wan.backup", "watchdog_target", cfg->wan_backup.watchdog_target);
+        AddEntryToList(&list, "Wan.backup", "qos",             cfg->wan_backup.qos);
+        AddEntryToList(&list, "Wan.backup", "modem_apn",       cfg->wan_backup.modem_apn);
+        AddEntryToList(&list, "Wan.backup", "modem_index",     cfg->wan_backup.modem_index);
+    }
+
     AddEntryToList(&list, "Firewall", "input_drop_wan", drop);
 
     char pd[2]   = { cfg->v6.pd ? '1' : '0', 0 };
@@ -178,6 +238,12 @@ int config_save_global(const char *path, const global_config_t *cfg) {
     AddEntryToList(&list, "IPv6", "pd",         pd);
     AddEntryToList(&list, "IPv6", "pd_length",  pd_l);
     AddEntryToList(&list, "IPv6", "ula_prefix", cfg->v6.ula_prefix);
+
+    char mir_en[2] = { cfg->mirror.enable ? '1' : '0', 0 };
+    AddEntryToList(&list, "Mirror", "enable",      mir_en);
+    AddEntryToList(&list, "Mirror", "sources",     cfg->mirror.sources);
+    AddEntryToList(&list, "Mirror", "direction",   cfg->mirror.direction);
+    AddEntryToList(&list, "Mirror", "destination", cfg->mirror.destination);
 
     int rc = MakeINIFile(path, list);
     FreeList(list);
@@ -230,4 +296,39 @@ int config_ensure_dirs(void) {
     if (ensure_dir(ONET_RUN_DIR,     0755) < 0) return -1;
     if (ensure_dir(ONET_LOG_DIR,     0755) < 0) return -1;
     return 0;
+}
+
+static int parse_int_ext(const struct dirent *d) {
+    if (!d || d->d_type != DT_REG) return 0;
+    const char *ext = strrchr(d->d_name, '.');
+    return ext && strcmp(ext, ".int") == 0;
+}
+
+int config_for_each_iface_filtered(config_iface_visitor_t fn,
+                                   config_iface_filter_t filter,
+                                   void *user) {
+    struct dirent **list = NULL;
+    int n = scandir(ONET_CONFIG_DIR, &list, parse_int_ext, alphasort);
+    if (n < 0) {
+        log_error("scandir %s: %m", ONET_CONFIG_DIR);
+        return -1;
+    }
+    int rc = 0;
+    for (int i = 0; i < n; i++) {
+        char path[512];
+        snprintf(path, sizeof path, "%s/%s",
+                 ONET_CONFIG_DIR, list[i]->d_name);
+        iface_config_t iface;
+        if (config_load_iface(path, &iface) == 0
+            && (!filter || filter(&iface))) {
+            if (fn(&iface, user) != 0) rc = -1;
+        }
+        free(list[i]);
+    }
+    free(list);
+    return rc;
+}
+
+int config_for_each_iface(config_iface_visitor_t fn, void *user) {
+    return config_for_each_iface_filtered(fn, NULL, user);
 }
