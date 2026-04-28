@@ -5,6 +5,8 @@ Wi-Fi (or wired/bridged) hotspot. Originally built to share an Android
 phone tether (EasyTether) but now usable with a 5G/LTE modem
 (`ModemManager`/`mmcli`), an upstream Ethernet, or any other interface.
 
+## Note: This project was an experiment and only updated to fix some critical issues and introduce support for a few new technologies. Please use OpenWRT for any stable routing and build from source to introduce any missing features.
+
 ## Layout
 
 ```
